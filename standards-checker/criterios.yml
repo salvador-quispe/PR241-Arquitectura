@@ -1,0 +1,430 @@
+# Alcance: SOLO arquitectura (estructura, capas, nombres, excepciones, persistencia, configuracion de entornos).
+# Seguridad, Docker/CI, testing y documentacion de API pertenecen a otros comites.
+# tipo: regla -> lo resuelve codigo (checker/reglas.py, campo "regla"); ia -> lo resuelve el modelo (fase 2).
+# Guia de correccion por criterio: que_cambiar, donde_esperado, opciones (A/B/C) y ejemplo antes/despues.
+# peso: 1-3. severidad: critica | alta | media | baja.
+# Version 4 = estandar hexagonal v2 (puertos y adaptadores). DTO-01 y PER-02 se retiraron: ya no son obligatorios.
+version: 4
+estandar: Arquitectura hexagonal v2 - ProjectArchitecture.md (PR241standards)
+criterios:
+- id: ARQ-01
+  seccion: Estructura de paquetes
+  descripcion: El microservicio tiene las tres capas domain, application e infrastructure bajo un mismo paquete base.
+  tipo: regla
+  regla: arq_01
+  verificacion: Buscar un paquete bajo src/main/java que contenga los tres directorios de capa.
+  que_cambiar: Crear las tres capas domain, application e infrastructure bajo un mismo paquete base y repartir las clases por responsabilidad.
+  donde_esperado: src/main/java/<paquete base>/{domain, application, infrastructure}
+  opciones:
+  - 'Opcion A (proyecto en capas clasicas controller/service/repository): model -> domain/models; service -> application/services; controller, repository, dto, config y exception -> infrastructure.'
+  - 'Opcion B (proyecto plano): crear los tres paquetes y mover clase por clase segun su responsabilidad (entidad de negocio, caso de uso, adaptador).'
+  - 'Opcion C (cualquiera): usar ''Move package/class'' del IDE para que los imports se actualicen solos; compilar despues de cada movimiento.'
+  ejemplo: 'ANTES: pe.edu.x.ms.controller.UserController / pe.edu.x.ms.service.UserService  ->  DESPUES: pe.edu.x.ms.infrastructure.rest.UserRest / pe.edu.x.ms.application.services.UserService'
+  peso: 3
+  severidad: critica
+- id: ARQ-02
+  seccion: Estructura de paquetes
+  descripcion: domain no depende de Spring ni de las capas application/infrastructure.
+  tipo: regla
+  regla: arq_02
+  verificacion: Ningun import de org.springframework ni de <base>.application / <base>.infrastructure en archivos de domain.
+  que_cambiar: Quitar de domain todo import de Spring y de las capas application/infrastructure; domain solo contiene POJOs, enums y reglas de negocio.
+  donde_esperado: Clases de domain listadas en 'Donde' (revisar sus imports).
+  opciones:
+  - 'Opcion A (el import es de persistencia: @Table, @Id de spring.data): crear {Entity}Entity o {Entity}Document en infrastructure con esas anotaciones y dejar la clase de domain como POJO (ver ARQ-03).'
+  - 'Opcion B (el import es una utilidad de Spring: Assert, StringUtils): reemplazar por Java estandar o mover esa logica a application.'
+  - 'Opcion C (importa un DTO, servicio o cliente de otra capa): invertir la dependencia; domain no los conoce, recibe los datos por parametros.'
+  ejemplo: 'ANTES: domain/model/Evento.java -> import org.springframework.data.relational.core.mapping.Table; @Table("eventos")  ->  DESPUES: domain/models/Evento.java (POJO limpio) + infrastructure/entity/EventoEntity.java
+    (@Table) + infrastructure/mapper/EventoMapper.java'
+  peso: 3
+  severidad: critica
+- id: ARQ-03
+  seccion: Estructura de paquetes
+  descripcion: Los modelos de domain no llevan anotaciones de persistencia (@Table, @Column, @Document, @Entity).
+  tipo: regla
+  regla: arq_03
+  verificacion: Buscar esas anotaciones en archivos de domain.
+  que_cambiar: 'Separar el modelo de dominio de la clase de persistencia: las anotaciones @Table/@Column/@Document/@Entity van solo en infrastructure.'
+  donde_esperado: 'Clases de domain listadas en ''Donde''; destino: infrastructure/entity (SQL) o infrastructure/document (Mongo).'
+  opciones:
+  - 'Opcion A (recomendada): crear {Entity}Entity o {Entity}Document con las anotaciones, dejar la clase de dominio sin anotaciones y convertir con {Entity}Mapper (infrastructure/mapper).'
+  - 'Opcion B (poco tiempo): mantener una sola clase pero moverla a infrastructure/entity y nombrarla *Entity; queda sin modelo de dominio puro, documentarlo como excepcion temporal.'
+  - 'Opcion C (mucho mapeo repetitivo): generar los mappers con MapStruct (@Mapper(componentModel = "spring")).'
+  ejemplo: 'ANTES: @Table("sesiones") class SesionTutoria { @Id Long id; ... }  ->  DESPUES: class SesionTutoria { Long id; ... } (domain) + @Table("sesiones") class SesionTutoriaEntity { @Id Long id; ...
+    } (infrastructure/entity)'
+  peso: 3
+  severidad: critica
+- id: ARQ-04
+  seccion: Estructura de paquetes
+  descripcion: Existe domain/model con las entidades de negocio.
+  tipo: regla
+  regla: arq_04
+  verificacion: Existe el directorio domain/model.
+  que_cambiar: Ubicar las entidades y agregados del negocio en domain/model (value objects y enums en domain/vo).
+  donde_esperado: domain/model (se muestra la ubicacion actual en 'Donde').
+  opciones:
+  - 'Opcion A: mover las clases del negocio a domain/model con el refactor del IDE (Move actualiza los imports).'
+  - 'Opcion B (hoy se llama domain/models o domain/entity): renombrar el paquete a domain/model; el estandar usa el singular.'
+  ejemplo: 'ANTES: domain/entity/Request.java  ->  DESPUES: domain/model/Request.java'
+  peso: 1
+  severidad: media
+- id: ARQ-05
+  seccion: Estructura de paquetes
+  descripcion: Existen los puertos domain/port/in (casos de uso) y domain/port/out (repositorio, cliente, storage).
+  tipo: regla
+  regla: arq_05
+  verificacion: Existen los directorios domain/port/in y domain/port/out.
+  que_cambiar: Declarar en domain/port/in lo que el servicio ofrece y en domain/port/out lo que necesita de afuera.
+  donde_esperado: domain/port/in y domain/port/out (se muestra la ubicacion actual en 'Donde').
+  opciones:
+  - 'Opcion A (el servicio usa Spring Data directo): crear {Entidad}RepositoryPort en domain/port/out, hacer que el caso de uso dependa de esa interfaz y que el adaptador de persistencia la implemente.'
+  - 'Opcion B (no hay interfaz del caso de uso): extraer {Entidad}UseCase a domain/port/in con Extract Interface del IDE.'
+  - 'Opcion C (el micro no consume nada externo): dejar domain/port/out solo con el puerto del repositorio.'
+  ejemplo: 'ANTES: usecase RequestService { RequestRepository repo }  ->  DESPUES: usecase RequestService { RequestRepositoryPort repo } + infrastructure/adapter/out/persistence/.../RequestPersistenceAdapter
+    implements RequestRepositoryPort'
+  peso: 2
+  severidad: alta
+- id: ARQ-06
+  seccion: Estructura de paquetes
+  descripcion: Existe application/usecase con los casos de uso.
+  tipo: regla
+  regla: arq_06
+  verificacion: Existe el directorio application/usecase.
+  que_cambiar: Ubicar la implementacion de los casos de uso en application/usecase, una clase por accion de negocio.
+  donde_esperado: application/usecase (se muestra la ubicacion actual en 'Donde').
+  opciones:
+  - 'Opcion A (hoy estan en application/service o application/services/impl): moverlas a application/usecase.'
+  - 'Opcion B (un servicio concentra muchas acciones): dividirlo por accion de negocio solo si crece; no es obligatorio.'
+  ejemplo: 'ANTES: application/services/impl/RequestServiceImpl.java  ->  DESPUES: application/usecase/RequestService.java'
+  peso: 1
+  severidad: media
+- id: ARQ-07
+  seccion: Estructura de paquetes
+  descripcion: Los controllers REST viven en infrastructure/adapter/in/rest.
+  tipo: regla
+  regla: arq_07
+  verificacion: Existe el directorio infrastructure/adapter/in/rest.
+  que_cambiar: 'Mover los controllers al adaptador de entrada REST: infrastructure/adapter/in/rest/controller.'
+  donde_esperado: infrastructure/adapter/in/rest/controller (se muestra la ubicacion actual en 'Donde').
+  opciones:
+  - 'Opcion A (hoy estan en infrastructure/rest o infrastructure/controller): moverlos a adapter/in/rest/controller con el IDE.'
+  ejemplo: 'ANTES: infrastructure/rest/RequestRest.java  ->  DESPUES: infrastructure/adapter/in/rest/controller/RequestRest.java'
+  peso: 1
+  severidad: media
+- id: ARQ-08
+  seccion: Estructura de paquetes
+  descripcion: Los DTOs HTTP se organizan en infrastructure/adapter/in/rest/dto/request y .../response.
+  tipo: regla
+  regla: arq_08
+  verificacion: Existen los directorios adapter/in/rest/dto/request y adapter/in/rest/dto/response.
+  que_cambiar: Separar los DTOs HTTP en request y response dentro del adaptador REST.
+  donde_esperado: infrastructure/adapter/in/rest/dto/request y .../response (se muestra la ubicacion actual en 'Donde').
+  opciones:
+  - 'Opcion A: mover los *Request a dto/request y los *Response a dto/response.'
+  - 'Opcion B (los DTOs se comparten con application): dejar en application/dto solo los contratos de aplicacion y mantener los HTTP en el adaptador.'
+  ejemplo: 'ANTES: infrastructure/dto/RequestDto.java  ->  DESPUES: infrastructure/adapter/in/rest/dto/request/CreateRequestRequest.java'
+  peso: 1
+  severidad: media
+- id: ARQ-09
+  seccion: Estructura de paquetes
+  descripcion: 'Cada frontera tiene su mapper: REST y persistencia.'
+  tipo: regla
+  regla: arq_09
+  verificacion: Existen adapter/in/rest/mapper y un mapper dentro de adapter/out/persistence/{tecnologia}.
+  que_cambiar: 'Crear un mapper por frontera: DTO HTTP <-> dominio y dominio <-> entity/document.'
+  donde_esperado: infrastructure/adapter/in/rest/mapper/ y infrastructure/adapter/out/persistence/{tecnologia}/mapper/.
+  opciones:
+  - 'Opcion A: mover los mappers existentes a la carpeta de su frontera.'
+  - 'Opcion B (los mappers estan todos juntos): separarlos segun conviertan DTO <-> dominio o dominio <-> persistencia.'
+  - 'Opcion C (dos modelos son realmente iguales): no crear un mapper vacio; el estandar lo desaconseja.'
+  ejemplo: 'ANTES: infrastructure/mapper/RequestMapper.java  ->  DESPUES: adapter/in/rest/mapper/RequestMapper.java + adapter/out/persistence/r2dbc/mapper/RequestPersistenceMapper.java'
+  peso: 1
+  severidad: media
+- id: ARQ-10
+  seccion: Estructura de paquetes
+  descripcion: 'La persistencia vive dentro del adaptador de salida: entity o document y repository.'
+  tipo: regla
+  regla: arq_10
+  verificacion: Existe infrastructure/adapter/out/persistence/{tecnologia}/ con entity o document y repository.
+  que_cambiar: Dejar el modelo de base de datos y el repositorio Spring Data dentro del adaptador de persistencia.
+  donde_esperado: infrastructure/adapter/out/persistence/{tecnologia}/entity|document y .../repository.
+  opciones:
+  - 'Opcion A (hoy estan en infrastructure/entity o infrastructure/repository): moverlos bajo adapter/out/persistence/{tecnologia}/.'
+  - 'Opcion B (las clases de dominio llevan @Table o @Document): crear {Entidad}Entity o {Entidad}Document y dejar el dominio como POJO.'
+  ejemplo: 'ANTES: infrastructure/entity/RequestEntity.java  ->  DESPUES: infrastructure/adapter/out/persistence/r2dbc/entity/RequestEntity.java'
+  peso: 1
+  severidad: media
+- id: ARQ-11
+  seccion: Regla de dependencia
+  descripcion: 'application depende solo de domain: no importa nada de infrastructure.'
+  tipo: regla
+  regla: arq_11
+  verificacion: 'Imports de <base>.infrastructure en application (sin excepcion: los puertos invierten la dependencia).'
+  que_cambiar: Hacer que application dependa solo de domain; lo que necesite de afuera lo declara como puerto en domain/port/out.
+  donde_esperado: application/usecase (los imports a infrastructure se listan en 'Donde').
+  opciones:
+  - 'Opcion A (importa el repositorio Spring Data): declarar {Entidad}RepositoryPort en domain/port/out e inyectarlo; el adaptador de persistencia lo implementa.'
+  - 'Opcion B (importa DTOs HTTP): que el caso de uso reciba y devuelva modelos de dominio; la conversion la hace el controller con su mapper.'
+  - 'Opcion C (importa un cliente externo): definir {Cliente}ClientPort en domain/port/out y dejar la implementacion en adapter/out/client.'
+  ejemplo: 'ANTES: import ...infrastructure.repository.RequestRepository  ->  DESPUES: import ...domain.port.out.RequestRepositoryPort'
+  peso: 3
+  severidad: alta
+- id: NOM-01
+  seccion: Convencion de nombres
+  descripcion: Los controllers REST usan el sufijo Rest (no Controller).
+  tipo: regla
+  regla: nom_01
+  verificacion: Clases con @RestController/@Controller cuyo nombre termina en Rest.
+  que_cambiar: Renombrar los controllers de {Entity}Controller a {Entity}Rest.
+  donde_esperado: Clases listadas en 'Donde'.
+  opciones:
+  - 'Opcion A: ''Rename class'' del IDE (Shift+F6 en IntelliJ); actualiza el archivo y las referencias.'
+  - 'Opcion B (HealthController u otros utilitarios): renombrarlos tambien (HealthRest) para mantener una sola convencion.'
+  ejemplo: 'ANTES: EventoController  ->  DESPUES: EventoRest (en infrastructure/rest)'
+  peso: 2
+  severidad: alta
+- id: NOM-02
+  seccion: Convencion de nombres
+  descripcion: Los casos de uso terminan en Service o UseCase.
+  tipo: regla
+  regla: nom_02
+  verificacion: Clases con @Service terminan en Service o UseCase.
+  que_cambiar: Nombrar los casos de uso {Entidad}Service o {Accion}{Entidad}UseCase.
+  donde_esperado: application/usecase
+  opciones:
+  - 'Opcion A: renombrar la clase con el IDE (Rename actualiza las referencias).'
+  ejemplo: 'ANTES: RequestManager  ->  DESPUES: RequestService'
+  peso: 1
+  severidad: media
+- id: NOM-03
+  seccion: Convencion de nombres
+  descripcion: Las interfaces no usan el prefijo I.
+  tipo: regla
+  regla: nom_03
+  verificacion: Interfaces cuyo nombre cumple ^I[A-Z].
+  que_cambiar: Quitar el prefijo I de las interfaces.
+  donde_esperado: Interfaces listadas en 'Donde'.
+  opciones:
+  - 'Opcion A: Rename del IDE: IMedicationService -> MedicationService.'
+  - 'Opcion B (choque de nombres con la implementacion): la implementacion pasa a {Nombre}Impl.'
+  ejemplo: 'ANTES: IMedicationRepository  ->  DESPUES: MedicationRepository'
+  peso: 1
+  severidad: media
+- id: NOM-04
+  seccion: Convencion de nombres
+  descripcion: Los paquetes estan en minusculas, sin snake_case.
+  tipo: regla
+  regla: nom_04
+  verificacion: Cada declaracion package cumple ^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$.
+  que_cambiar: Usar paquetes en minusculas, sin guiones bajos ni mayusculas.
+  donde_esperado: Paquetes listados en 'Donde'.
+  opciones:
+  - 'Opcion A: Rename package del IDE: pe.edu.vg_ms.alertas -> pe.edu.vallegrande.alertas.'
+  ejemplo: 'ANTES: pe.edu.vg_ms.alertas  ->  DESPUES: pe.edu.vallegrande.alertas'
+  peso: 1
+  severidad: baja
+- id: NOM-05
+  seccion: Convencion de nombres
+  descripcion: Las clases de persistencia usan el sufijo Document (Mongo) o Entity (SQL).
+  tipo: regla
+  regla: nom_05
+  verificacion: Clases con @Document terminan en Document; clases con @Table/@Entity terminan en Entity.
+  que_cambiar: Las clases de persistencia llevan el sufijo Document (Mongo) o Entity (SQL).
+  donde_esperado: Clases listadas en 'Donde'.
+  opciones:
+  - 'Opcion A: Rename del IDE: SesionTutoria (con @Table) -> SesionTutoriaEntity.'
+  - 'Opcion B (si tambien las usas como modelo de dominio): primero separarlas (ver ARQ-03) y luego nombrar la clase de persistencia.'
+  ejemplo: 'ANTES: @Document class Medication  ->  DESPUES: @Document class MedicationDocument'
+  peso: 1
+  severidad: media
+- id: NOM-06
+  seccion: Convencion de nombres
+  descripcion: Los repositorios usan el sufijo Repository.
+  tipo: regla
+  regla: nom_06
+  verificacion: Interfaces que extienden un *Repository<...> terminan en Repository.
+  que_cambiar: Los repositorios Spring Data terminan en Repository.
+  donde_esperado: Interfaces listadas en 'Donde'.
+  opciones:
+  - 'Opcion A: Rename del IDE: EventoR2dbcRepo -> EventoRepository.'
+  ejemplo: 'ANTES: EventoR2dbcRepo  ->  DESPUES: EventoRepository'
+  peso: 1
+  severidad: baja
+- id: NOM-07
+  seccion: Convencion de nombres
+  descripcion: El artifactId del proyecto sigue vg-ms-{service-name}.
+  tipo: regla
+  regla: nom_07
+  verificacion: artifactId del pom.xml empieza con vg-ms-.
+  que_cambiar: El artifactId del proyecto sigue vg-ms-{service-name}.
+  donde_esperado: 'pom.xml: <artifactId> y <name> del proyecto (no el del <parent>).'
+  opciones:
+  - 'Opcion A: cambiar <artifactId> a vg-ms-{servicio} y revisar el nombre de la imagen Docker y del pipeline.'
+  - 'Opcion B (ya desplegado con otro nombre): mantener el nombre actual y documentar la excepcion en el README.'
+  ejemplo: 'ANTES: <artifactId>tutoria-activity</artifactId>  ->  DESPUES: <artifactId>vg-ms-tutoria</artifactId>'
+  peso: 1
+  severidad: baja
+- id: NOM-08
+  seccion: Convencion de nombres
+  descripcion: Los puertos de entrada terminan en UseCase y los de salida en Port.
+  tipo: regla
+  regla: nom_08
+  verificacion: Interfaces de domain/port/in terminan en UseCase; las de domain/port/out, en Port.
+  que_cambiar: 'Nombrar los puertos segun su direccion: {Entidad}UseCase (entrada) y {Entidad}RepositoryPort / {Cliente}ClientPort (salida).'
+  donde_esperado: domain/port/in y domain/port/out
+  opciones:
+  - 'Opcion A: renombrar con el IDE; los imports se actualizan solos.'
+  ejemplo: 'ANTES: domain/port/out/RequestRepository.java  ->  DESPUES: domain/port/out/RequestRepositoryPort.java'
+  peso: 1
+  severidad: media
+- id: EXC-01
+  seccion: Manejo de excepciones
+  descripcion: Existe un GlobalExceptionHandler anotado con @RestControllerAdvice.
+  tipo: regla
+  regla: exc_01
+  verificacion: Clase GlobalExceptionHandler con @RestControllerAdvice o @ControllerAdvice.
+  que_cambiar: Crear un GlobalExceptionHandler con @RestControllerAdvice.
+  donde_esperado: infrastructure/exception/GlobalExceptionHandler.java
+  opciones:
+  - 'Opcion A: clase nueva con @RestControllerAdvice y un @ExceptionHandler por excepcion de negocio (404, 400, 409) mas un fallback 500.'
+  - 'Opcion B (ya existe con otro nombre o sin anotacion): renombrarlo a GlobalExceptionHandler y anotarlo.'
+  ejemplo: '@RestControllerAdvice class GlobalExceptionHandler { @ExceptionHandler(ResourceNotFoundException.class) Mono<ResponseEntity<ErrorMessage>> notFound(...) { ... } }'
+  peso: 3
+  severidad: critica
+- id: EXC-02
+  seccion: Manejo de excepciones
+  descripcion: Las excepciones de negocio viven en domain/exception.
+  tipo: regla
+  regla: exc_02
+  verificacion: Existe al menos una clase *Exception dentro de domain.
+  que_cambiar: Ubicar las excepciones de negocio en domain/exception; las tecnicas del adaptador, en infrastructure/exception/custom.
+  donde_esperado: domain/exception
+  opciones:
+  - 'Opcion A: mover las excepciones que lanza el caso de uso a domain/exception.'
+  - 'Opcion B (el micro no tiene reglas de negocio con errores propios): el criterio se cumple en cuanto exista la primera excepcion de negocio, por ejemplo {Entidad}NotFoundException.'
+  ejemplo: 'ANTES: infrastructure/exception/custom/RequestNotFoundException.java  ->  DESPUES: domain/exception/RequestNotFoundException.java'
+  peso: 1
+  severidad: media
+- id: EXC-03
+  seccion: Manejo de excepciones
+  descripcion: No se lanza RuntimeException generica; se usan excepciones tipadas.
+  tipo: regla
+  regla: exc_03
+  verificacion: Contar 'throw new RuntimeException(' en src/main.
+  que_cambiar: Reemplazar 'throw new RuntimeException(...)' por excepciones tipadas.
+  donde_esperado: Archivos listados en 'Donde'.
+  opciones:
+  - 'Opcion A (recurso no encontrado o regla de negocio): crear una excepcion en infrastructure/exception/custom y mapearla en el handler.'
+  - 'Opcion B (falla de un servicio externo): ExternalServiceException mapeada a 502/503.'
+  - 'Opcion C (error de programacion): IllegalStateException o IllegalArgumentException con un mensaje claro.'
+  ejemplo: 'ANTES: throw new RuntimeException("Evento no encontrado")  ->  DESPUES: throw new ResourceNotFoundException("Evento", id)'
+  peso: 2
+  severidad: alta
+- id: EXC-04
+  seccion: Manejo de excepciones
+  descripcion: Se manejan los errores de integridad de base de datos.
+  tipo: regla
+  regla: exc_04
+  verificacion: Algun *ExceptionHandler referencia DataIntegrityViolationException o DuplicateKeyException.
+  que_cambiar: Manejar los errores de integridad de base de datos en un handler (409).
+  donde_esperado: infrastructure/exception/GlobalExceptionHandler
+  opciones:
+  - 'Opcion A (SQL): @ExceptionHandler(DataIntegrityViolationException.class) -> 409 con mensaje funcional.'
+  - 'Opcion B (Mongo): @ExceptionHandler(DuplicateKeyException.class) -> 409.'
+  ejemplo: '@ExceptionHandler(DataIntegrityViolationException.class) ResponseEntity<ErrorMessage> conflict(...) { return ResponseEntity.status(409).body(...); }'
+  peso: 1
+  severidad: media
+- id: EXC-05
+  seccion: Manejo de excepciones
+  descripcion: No se decide el codigo HTTP comparando e.getMessage().
+  tipo: regla
+  regla: exc_05
+  verificacion: Buscar getMessage().contains/equals/startsWith... en src/main, fuera de las clases *ExceptionHandler (alli solo elige el texto, no el codigo HTTP).
+  que_cambiar: No decidir el codigo HTTP comparando el texto de e.getMessage().
+  donde_esperado: Archivos listados en 'Donde'.
+  opciones:
+  - 'Opcion A: lanzar excepciones tipadas distintas y un handler por tipo.'
+  - 'Opcion B: devolver un codigo de error propio en la excepcion (campo errorCode) y que el handler lo traduzca a HTTP.'
+  ejemplo: 'ANTES: if (e.getMessage().contains("no encontrada")) return 404;  ->  DESPUES: catch (ResourceNotFoundException e) -> handler 404'
+  peso: 2
+  severidad: alta
+- id: PER-01
+  seccion: Persistencia
+  descripcion: El stack es reactivo (WebFlux) sin dependencias bloqueantes (starter-web, JPA, JDBC).
+  tipo: regla
+  regla: per_01
+  verificacion: pom.xml tiene spring-boot-starter-webflux y no tiene starter-web/data-jpa/jdbc.
+  que_cambiar: Usar solo el stack reactivo (WebFlux + R2DBC o Mongo reactivo) y quitar dependencias bloqueantes.
+  donde_esperado: 'pom.xml: dependencies.'
+  opciones:
+  - 'Opcion A: reemplazar spring-boot-starter-web por spring-boot-starter-webflux.'
+  - 'Opcion B: reemplazar spring-boot-starter-data-jpa/jdbc por spring-boot-starter-data-r2dbc (SQL) o spring-boot-starter-data-mongodb-reactive.'
+  ejemplo: 'ANTES: spring-boot-starter-web + data-jpa  ->  DESPUES: spring-boot-starter-webflux + data-r2dbc'
+  peso: 2
+  severidad: alta
+- id: CFG-01
+  seccion: Configuracion y entornos
+  descripcion: Las URLs de lab.vallegrande.edu.pe llegan por variable de entorno.
+  tipo: regla
+  regla: cfg_01
+  verificacion: Sin URLs de vallegrande.edu.pe escritas fijas en application*.yml ni en codigo Java.
+  que_cambiar: Reemplazar el host escrito por una variable de entorno con valor por defecto.
+  donde_esperado: src/main/resources/application*.yml e infrastructure/config
+  opciones:
+  - 'Opcion A (YAML): issuer-uri: ${KEYCLOAK_ISSUER_URI:https://lab.vallegrande.edu.pe/...} en lugar del host fijo.'
+  - 'Opcion B (Java, CORS): leer los origenes con @Value("${app.cors.allowed-origins}") desde infrastructure/config.'
+  ejemplo: 'ANTES: issuer-uri: https://lab.vallegrande.edu.pe/keycloak/realms/x  ->  DESPUES: issuer-uri: ${KEYCLOAK_ISSUER_URI:https://lab.vallegrande.edu.pe/keycloak/realms/x}'
+  peso: 1
+  severidad: media
+- id: IA-01
+  seccion: Capas
+  descripcion: Los controllers Rest no contienen logica de negocio; solo adaptan HTTP a los servicios.
+  tipo: ia
+  verificacion: Revisar los metodos de los controllers.
+  que_cambiar: Revisar a mano que los controllers solo adapten HTTP a los servicios (sin reglas de negocio).
+  donde_esperado: Metodos de infrastructure/rest.
+  opciones:
+  - 'Pregunta guia: el metodo contiene if/for con reglas del negocio, calculos o llamadas a varios repositorios? Entonces esa logica va en application/services.'
+  - 'Opcion A: mover la logica a un metodo del ServiceImpl y dejar en el Rest solo: recibir, validar, llamar al servicio, responder.'
+  ejemplo: 'ANTES: Rest calcula el estado de la incidencia  ->  DESPUES: IncidenciaServiceImpl.calcularEstado(...) y el Rest solo lo invoca'
+  peso: 2
+  severidad: alta
+- id: IA-02
+  seccion: Capas
+  descripcion: Los servicios no dependen de detalles HTTP (ServerWebExchange, ResponseEntity, DTOs de la capa web).
+  tipo: ia
+  verificacion: Revisar firmas y cuerpo de los servicios.
+  que_cambiar: Revisar a mano que los servicios no dependan de detalles HTTP.
+  donde_esperado: Clases de application/services.
+  opciones:
+  - 'Pregunta guia: el servicio usa ServerWebExchange, ResponseEntity, HttpStatus o DTOs de la capa web? Entonces debe trabajar con modelos de dominio.'
+  - 'Opcion A: cambiar la firma del servicio a tipos de dominio y mover la conversion al Rest.'
+  ejemplo: 'ANTES: Mono<ResponseEntity<EventoResponse>> crear(EventoRequest r)  ->  DESPUES: Mono<Evento> crear(Evento e)'
+  peso: 2
+  severidad: alta
+- id: IA-03
+  seccion: DTOs
+  descripcion: Los endpoints no exponen modelos de dominio ni entidades de persistencia.
+  tipo: ia
+  verificacion: Revisar tipos de retorno y parametros de los controllers.
+  que_cambiar: Revisar a mano que los endpoints no expongan modelos de dominio ni entidades de persistencia.
+  donde_esperado: Tipos de retorno y parametros de infrastructure/rest.
+  opciones:
+  - 'Pregunta guia: un metodo del Rest devuelve o recibe una clase de domain/models o de infrastructure/entity|document? Entonces crear un DTO.'
+  - 'Opcion A: crear {Entity}Request/{Entity}Response y convertir con {Entity}DtoMapper.'
+  ejemplo: 'ANTES: Flux<Evento> listar()  ->  DESPUES: Flux<EventoResponse> listar()'
+  peso: 2
+  severidad: alta
+- id: IA-04
+  seccion: Excepciones
+  descripcion: 'El manejo de errores es consistente: excepciones tipadas mapeadas al codigo HTTP correcto.'
+  tipo: ia
+  verificacion: Revisar GlobalExceptionHandler y excepciones custom.
+  que_cambiar: 'Revisar a mano que el manejo de errores sea consistente: excepcion tipada -> codigo HTTP correcto -> cuerpo estandar.'
+  donde_esperado: infrastructure/exception.
+  opciones:
+  - 'Pregunta guia: cada excepcion de negocio tiene su handler y devuelve el mismo formato (ErrorMessage)?'
+  - 'Opcion A: unificar el cuerpo de error en ErrorMessage y revisar que 404/400/409/500 se usen segun el tipo.'
+  ejemplo: ResourceNotFoundException -> 404, regla de negocio violada -> 400, duplicado -> 409, inesperado -> 500 (todos con ErrorMessage)
+  peso: 1
+  severidad: media

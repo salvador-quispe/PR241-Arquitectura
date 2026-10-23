@@ -1,0 +1,32 @@
+# Plantilla del Standards Checker (PR241). Cada micro la incluye con 3 lineas en su .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/salvador-quispe/PR241-Arquitectura/main/standards-checker/templates/check-micro.yml'
+#
+# No necesita variables en GitLab, ni la etapa "test", ni copiar carpetas. Corre en la etapa .post (siempre existe,
+# no retrasa los demas jobs) y no bloquea el pipeline. Al sheet solo viajan nombres de clases y rutas.
+standards-check:
+  stage: .post
+  image: python:3.12-slim
+  allow_failure: true
+  variables:
+    GIT_DEPTH: "20"
+    STANDARDS_CHECKER_REPO: "https://github.com/salvador-quispe/PR241-Arquitectura.git"
+    STANDARDS_CHECKER_REF: "main"
+    STANDARDS_WEBHOOK_URL: "https://script.google.com/macros/s/AKfycbzDsPYhEVLz-KsImYZWGzCw0xvc_0lDXGS3m-ZvXlc7MWDbY8BckyPjFcIjsLwhbhjI/exec"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: always
+    - if: '$STANDARDS_PUBLISH_ALL == "true"'
+      when: always
+  script:
+    - apt-get update -qq && apt-get install -y -qq git > /dev/null
+    - git clone -q --depth 1 --branch "$STANDARDS_CHECKER_REF" "$STANDARDS_CHECKER_REPO" /tmp/sc
+    - pip install -q -r /tmp/sc/standards-checker/requirements.txt
+    - python /tmp/sc/standards-checker/run.py --micro "$CI_PROJECT_DIR" --out reporte-estandares --publicar "webhook:$STANDARDS_WEBHOOK_URL"
+    - head -60 reporte-estandares/reporte-estandares.md
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - reporte-estandares/
